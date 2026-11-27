@@ -1,0 +1,82 @@
+# Al subir una etiqueta (ej. v1.0.0): compila el ejecutable para cada sistema,
+# lo prueba, lo publica como "Release" y luego prueba los instaladores de un solo comando.
+name: Publicar versión
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  compilar:
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest,   asset: gestion-tareas-windows-x64.exe }
+          - { os: ubuntu-22.04,     asset: gestion-tareas-linux-x64 }
+          - { os: ubuntu-22.04-arm, asset: gestion-tareas-linux-arm64 }
+          - { os: macos-latest,     asset: gestion-tareas-macos-arm64 }
+          - { os: macos-15-intel,   asset: gestion-tareas-macos-x64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller
+      - run: pyinstaller --onefile --name gestion-tareas gestion_tareas.py
+      - name: Probar el ejecutable
+        run: |
+          exe=dist/gestion-tareas; [ -f "$exe.exe" ] && exe="$exe.exe"
+          "$exe" < tests/sesion.txt > salida.txt 2>&1
+          cat salida.txt
+          grep -qF "Progreso general:      50.0%" salida.txt
+          grep -qF "Tarea 'Comprar pan' eliminada exitosamente." salida.txt
+          grep -qF "Hasta pronto" salida.txt
+          ! grep -q Traceback salida.txt
+      - run: mv dist/gestion-tareas* "${{ matrix.asset }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  publicar:
+    needs: compilar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "Instrucciones de instalación en el README."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  probar-instalador:
+    needs: publicar
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar y usar como lo haría una persona (Mac/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
+          ~/.local/bin/gestion-tareas < tests/sesion.txt > salida.txt 2>&1
+          grep -qF "Hasta pronto" salida.txt
+          ! grep -q Traceback salida.txt
+      - name: Instalar y usar como lo haría una persona (Windows, PowerShell 5)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex
+          cmd /c "gestion-tareas < tests\sesion.txt > salida.txt 2>&1"
+          if ($LASTEXITCODE -ne 0) { throw "El programa terminó con error" }
+          if (-not (Select-String -Path salida.txt -SimpleMatch 'Hasta pronto' -Quiet)) { throw 'El programa no terminó bien' }
+          if (Select-String -Path salida.txt -SimpleMatch 'Traceback' -Quiet) { throw 'Error de Python' }

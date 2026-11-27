@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/
+*.spec
+.venv/
+venv/
+
+# Archivos de otros entregables que viven en esta carpeta pero no son parte del programa
+*.pptx
+*.html
