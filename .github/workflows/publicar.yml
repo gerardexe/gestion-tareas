@@ -25,17 +25,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyinstaller
-      - run: pyinstaller --onefile --name gestion-tareas gestion_tareas.py
-      - name: Probar el ejecutable
+      - run: pip install -r requirements.txt pyinstaller
+      - name: Pruebas de la app (robot de Textual)
+        run: python tests/test_app.py
+      # Textual y Rich cargan partes de sí mismos al vuelo: hay que pedirle a PyInstaller que las incluya todas
+      - run: pyinstaller --onefile --name gestion-tareas --collect-submodules textual --collect-submodules rich --collect-data textual gestion_tareas.py
+      - name: Probar el ejecutable (arranca y su versión coincide con la etiqueta)
         run: |
           exe=dist/gestion-tareas; [ -f "$exe.exe" ] && exe="$exe.exe"
-          "$exe" < tests/sesion.txt > salida.txt 2>&1
-          cat salida.txt
-          grep -qF "Progreso general:      50.0%" salida.txt
-          grep -qF "Tarea 'Comprar pan' eliminada exitosamente." salida.txt
-          grep -qF "Hasta pronto" salida.txt
-          ! grep -q Traceback salida.txt
+          "$exe" --version
+          "$exe" --version | grep -qxF "gestion-tareas ${GITHUB_REF_NAME#v}"
       - run: mv dist/gestion-tareas* "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
@@ -63,20 +62,15 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Instalar y usar como lo haría una persona (Mac/Linux)
+      - name: Instalar como lo haría una persona y comprobar la versión (Mac/Linux)
         if: runner.os != 'Windows'
         run: |
           curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | sh
-          ~/.local/bin/gestion-tareas < tests/sesion.txt > salida.txt 2>&1
-          grep -qF "Hasta pronto" salida.txt
-          ! grep -q Traceback salida.txt
-      - name: Instalar y usar como lo haría una persona (Windows, PowerShell 5)
+          ~/.local/bin/gestion-tareas --version | grep -qxF "gestion-tareas ${GITHUB_REF_NAME#v}"
+      - name: Instalar como lo haría una persona y comprobar la versión (Windows, PowerShell 5)
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex
-          cmd /c "gestion-tareas < tests\sesion.txt > salida.txt 2>&1"
-          if ($LASTEXITCODE -ne 0) { throw "El programa terminó con error" }
-          if (-not (Select-String -Path salida.txt -SimpleMatch 'Hasta pronto' -Quiet)) { throw 'El programa no terminó bien' }
-          if (Select-String -Path salida.txt -SimpleMatch 'Traceback' -Quiet) { throw 'Error de Python' }
+          $v = gestion-tareas --version
+          if ($v -ne "gestion-tareas $($env:GITHUB_REF_NAME.TrimStart('v'))") { throw "Versión inesperada: $v" }
